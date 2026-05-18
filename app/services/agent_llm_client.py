@@ -38,8 +38,12 @@ class AgentLLMResponse:
     content: str
     tool_calls: list[ToolCall] = field(default_factory=list)
     stop_reason: str = "end_turn"
-    # Raw Anthropic content blocks — used to build the next assistant message
-    # for providers that require full content-block history (Anthropic).
+    # Raw provider message data for the next assistant turn.
+    # Anthropic: list of content blocks (always populated).
+    # OpenAI-compatible: dict with role/content/tool_calls, populated only when
+    # provider-specific extras (e.g. Gemini's thought_signature) need to be
+    # preserved; otherwise None and the assistant message is reconstructed via
+    # build_assistant_message.
     raw_content: Any = None
 
     @property
@@ -332,13 +336,12 @@ class OpenAIAgentClient:
         stop_reason = choice.finish_reason or "stop"
 
         tool_calls: list[ToolCall] = []
-        if msg.tool_calls:
-            for tc in msg.tool_calls:
-                try:
-                    input_dict = json.loads(tc.function.arguments)
-                except json.JSONDecodeError:
-                    input_dict = {}
-                tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, input=input_dict))
+        for tc in msg.tool_calls or []:
+            try:
+                input_dict = json.loads(tc.function.arguments)
+            except json.JSONDecodeError:
+                input_dict = {}
+            tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, input=input_dict))
 
         return AgentLLMResponse(
             content=content,
@@ -347,7 +350,7 @@ class OpenAIAgentClient:
             # Preserve the raw API message so provider-specific fields (e.g. Gemini
             # thought_signature in tool_calls) survive into the next conversation turn.
             # exclude_none=True strips null fields (refusal, audio, function_call …)
-            # that Gemini's strict endpoint would reject on the next turn.
+            # that strict OpenAI-compatible endpoints may reject on replay.
             raw_content=msg.model_dump(exclude_none=True),
         )
 
