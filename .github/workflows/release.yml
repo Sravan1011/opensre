@@ -10,7 +10,6 @@ on:
       - "**/*.md"
       - "**/*.mdx"
       - ".claude/**"
-      - ".understand-anything/**"
       - ".github/**"
   schedule:
     - cron: "30 0 * * *"
