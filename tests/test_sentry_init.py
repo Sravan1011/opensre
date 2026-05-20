@@ -340,6 +340,134 @@ def test_before_send_scrubs_home_paths_in_stack_frames() -> None:
     assert frame["vars"]["auth_token"] == "[Filtered]"
 
 
+def test_before_send_scrubs_pydantic_input_value_from_exception_message() -> None:
+    """Pydantic V2 ValidationError renders ``input_value=<raw>`` inside the
+    exception message. When the failing field is a secret (api_token,
+    password, ...), the raw value lands in ``exception.values[].value`` and
+    bypasses the key-based scrubbers. ``_scrub_event_in_place`` strips it
+    before transport.
+    """
+    event = {
+        "exception": {
+            "values": [
+                {
+                    "type": "ValidationError",
+                    "value": (
+                        "1 validation error for VercelConfig\n"
+                        "api_token\n"
+                        "  String should match pattern '...' "
+                        "[type=string_pattern_mismatch, "
+                        "input_value='sk-real-secret-token-xyz', "
+                        "input_type=str]"
+                    ),
+                }
+            ]
+        }
+    }
+
+    sentry_mod._before_send(event, {})
+
+    scrubbed = event["exception"]["values"][0]["value"]
+    assert "sk-real-secret-token-xyz" not in scrubbed
+    assert "input_value=[Filtered]" in scrubbed
+    # Surrounding triage context must survive — only the value is stripped.
+    assert "ValidationError" in event["exception"]["values"][0]["type"]
+    assert "api_token" in scrubbed
+    assert "string_pattern_mismatch" in scrubbed
+
+
+def test_before_send_scrubs_input_value_across_multiple_errors() -> None:
+    # Multi-field ValidationError: every input_value occurrence must be stripped.
+    event = {
+        "exception": {
+            "values": [
+                {
+                    "type": "ValidationError",
+                    "value": (
+                        "2 validation errors for Demo\n"
+                        "api_key\n"
+                        "  String should have at least 10 characters "
+                        "[type=string_too_short, input_value='leaky-api-key', input_type=str]\n"
+                        "password\n"
+                        "  Input should be a valid string "
+                        "[type=string_type, input_value='p4ssword!', input_type=str]"
+                    ),
+                }
+            ]
+        }
+    }
+
+    sentry_mod._before_send(event, {})
+
+    scrubbed = event["exception"]["values"][0]["value"]
+    assert "leaky-api-key" not in scrubbed
+    assert "p4ssword!" not in scrubbed
+    assert scrubbed.count("input_value=[Filtered]") == 2
+
+
+def test_before_send_leaves_unrelated_exception_messages_alone() -> None:
+    # A non-pydantic message must pass through verbatim (modulo home-path
+    # substitution which is the existing behaviour for strings).
+    original = "ConnectionError: cannot connect to 10.0.0.1:5432"
+    event = {"exception": {"values": [{"type": "ConnectionError", "value": original}]}}
+
+    sentry_mod._before_send(event, {})
+
+    assert event["exception"]["values"][0]["value"] == original
+
+
+def test_before_send_scrubs_list_typed_input_value_without_mid_clip() -> None:
+    # Pydantic V2 flattens list-field errors to per-element scalar entries
+    # (val.0, val.1, ...), so the rendered ``input_value=`` is always a
+    # scalar repr. Lock that behaviour: the scrubber must replace the whole
+    # value, not clip an inner bracket.
+    event = {
+        "exception": {
+            "values": [
+                {
+                    "type": "ValidationError",
+                    "value": (
+                        "2 validation errors for A\n"
+                        "val.0\n  Input should be a valid integer "
+                        "[type=int_parsing, input_value='secret_a', input_type=str]\n"
+                        "val.1\n  Input should be a valid integer "
+                        "[type=int_parsing, input_value='secret_b', input_type=str]"
+                    ),
+                }
+            ]
+        }
+    }
+
+    sentry_mod._before_send(event, {})
+
+    scrubbed = event["exception"]["values"][0]["value"]
+    assert "secret_a" not in scrubbed
+    assert "secret_b" not in scrubbed
+    assert scrubbed.count("input_value=[Filtered]") == 2
+
+
+def test_scrub_exception_value_is_idempotent() -> None:
+    # Re-scrubbing an already-scrubbed message must be a no-op. Guards
+    # against a future refactor that runs the scrub pass twice (e.g. once
+    # in before_send and once in a downstream hook).
+    once = sentry_mod._scrub_exception_value(
+        "[type=string_too_short, input_value='leaky', input_type=str]"
+    )
+    twice = sentry_mod._scrub_exception_value(once)
+    assert once == twice
+    assert "leaky" not in once
+
+
+def test_scrub_exception_value_handles_truncated_message_without_input_type() -> None:
+    # Defense in depth (flagged by Greptile review): a custom-rendered or
+    # truncated message that ends mid-bracket with no `, input_type=` after
+    # the secret must still be scrubbed, not silently leaked.
+    text = "1 validation error\napi_token\n  bad [type=str, input_value='sk-leak'"
+    scrubbed = sentry_mod._scrub_exception_value(text)
+    assert "sk-leak" not in scrubbed
+    assert "input_value=[Filtered]" in scrubbed
+
+
 def test_before_breadcrumb_strips_query_string_for_http_categories() -> None:
     crumb = {
         "category": "httpx",

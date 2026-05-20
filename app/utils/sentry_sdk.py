@@ -27,6 +27,20 @@ from app.constants import (
 )
 
 _HOME_PATH_RE: re.Pattern[str] = re.compile(r"/(?:Users|home)/[^/\s]+")
+# Pydantic V2 ValidationError messages render ``input_value=<repr>`` (or
+# ``input=<repr>``) for each failing field. When the failing field is e.g.
+# ``api_token`` or ``password``, the raw secret lands in the rendered text
+# and reaches Sentry through ``exception.values[].value`` — a layer the
+# existing key-based scrubbers do not walk. Strip the value up to the next
+# pydantic field separator, which is always ``, input_type=``. ``\Z`` is the
+# end-of-string fallback so a truncated message (no ``, input_type=`` after
+# the secret) still gets scrubbed instead of silently leaking. The placeholder
+# left behind (``input_value=[Filtered]``) has no ``, input_type=`` immediately
+# after the bracket, so re-applying the scrub is a no-op (idempotent).
+_PYDANTIC_INPUT_RE: re.Pattern[str] = re.compile(
+    r"input(?:_value)?=.*?(?=,\s*input_type=|\Z)",
+    flags=re.DOTALL,
+)
 _SENSITIVE_KEY_SUFFIXES: tuple[str, ...] = ("_token", "_key", "_secret", "_password")
 _SENSITIVE_KEY_SUBSTRINGS: tuple[str, ...] = (
     "prompt",
@@ -216,6 +230,20 @@ def _scrub_stacktrace_frames(frames: list[dict[str, Any]]) -> None:
                     local_vars[key] = _scrub_string(value)
 
 
+def _scrub_exception_value(text: str) -> str:
+    """Strip rendered field values from an exception message string.
+
+    Pydantic V2 ``ValidationError`` is the main offender — the renderer
+    embeds ``input_value=<repr>`` for each failing field, which leaks the
+    raw value (often a secret) into ``exception.values[].value`` where the
+    existing key-based scrubbers do not reach. ``_HOME_PATH_RE`` is also
+    applied so home-directory paths in arbitrary messages get the same
+    treatment they do elsewhere.
+    """
+    scrubbed = _PYDANTIC_INPUT_RE.sub("input_value=[Filtered]", text)
+    return _HOME_PATH_RE.sub("~", scrubbed)
+
+
 def _scrub_event_in_place(event: dict[str, Any]) -> None:
     request = event.get("request")
     if isinstance(request, dict):
@@ -228,7 +256,12 @@ def _scrub_event_in_place(event: dict[str, Any]) -> None:
     exception = event.get("exception")
     if isinstance(exception, dict):
         for entry in exception.get("values", []) or []:
-            stacktrace = entry.get("stacktrace") if isinstance(entry, dict) else None
+            if not isinstance(entry, dict):
+                continue
+            value = entry.get("value")
+            if isinstance(value, str):
+                entry["value"] = _scrub_exception_value(value)
+            stacktrace = entry.get("stacktrace")
             if isinstance(stacktrace, dict):
                 frames = stacktrace.get("frames")
                 if isinstance(frames, list):
