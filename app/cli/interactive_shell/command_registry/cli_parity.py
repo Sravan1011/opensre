@@ -234,6 +234,10 @@ def _cmd_watchdog(session: ReplSession, console: Console, args: list[str]) -> bo
     return run_cli_command(console, ["watchdog", *args])
 
 
+def _cmd_debug(session: ReplSession, console: Console, args: list[str]) -> bool:  # noqa: ARG001
+    return run_cli_command(console, ["debug", *args])
+
+
 COMMANDS: list[SlashCommand] = [
     SlashCommand(
         "/onboard",
@@ -319,6 +323,12 @@ COMMANDS: list[SlashCommand] = [
         _cmd_watchdog,
         usage=("/watchdog --pid <pid> [--max-rss <size>] [--max-cpu <percent>]",),
         examples=("/watchdog --pid 123 --max-rss 1G",),
+        execution_tier=ExecutionTier.SAFE,
+    ),
+    SlashCommand(
+        "/debug",
+        "run targeted runtime diagnostics",
+        _cmd_debug,
         execution_tier=ExecutionTier.SAFE,
     ),
 ]
