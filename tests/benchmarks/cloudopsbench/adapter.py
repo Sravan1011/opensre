@@ -56,6 +56,9 @@ from tests.benchmarks.cloudopsbench.case_loader import (
     load_cases as _legacy_load_cases,
 )
 from tests.benchmarks.cloudopsbench.held_out_split import compute_held_out_set
+from tests.benchmarks.cloudopsbench.performance_alert_localization import (
+    performance_context_for_case_dir,
+)
 from tests.benchmarks.cloudopsbench.predictor import (
     emit_paper_predictions,
 )
@@ -415,7 +418,14 @@ class CloudOpsBenchAdapter(BenchmarkAdapter):
         from app.services.agent_llm_client import get_agent_llm
 
         alert = self.build_alert(case)
+        legacy = self._require_case(case)
         investigation_summary = _summarize_investigation(run)
+        metric_alerts, perf_hint = performance_context_for_case_dir(
+            legacy.case_dir, namespace=legacy.namespace
+        )
+        if legacy.fault_category != "performance":
+            perf_hint = None
+            metric_alerts = ""
 
         try:
             llm = get_agent_llm()
@@ -425,6 +435,8 @@ class CloudOpsBenchAdapter(BenchmarkAdapter):
         payload = emit_paper_predictions(
             alert_text=_alert_text_for_predictor(alert.normalized),
             investigation_summary=investigation_summary,
+            metric_alerts=metric_alerts,
+            performance_localization_hint=perf_hint,
             llm=llm,
         )
         if payload is None:
@@ -602,10 +614,18 @@ def _summarize_investigation(run: RunResult) -> str:
     """
     parts: list[str] = []
     diagnosis = run.final_diagnosis
+    # Lead with opensre's own conclusion so the predictor anchors rank-1 on it
+    # rather than re-deriving from the (hedge-heavy) report body. The
+    # 2026-06-06 run showed the predictor dropped the correct component named
+    # in opensre's report from its top-3 on 15% of failures (3x the
+    # no-investigation arm) — a translation-loss leak this framing closes.
+    component = diagnosis.get("component")
+    if component:
+        parts.append(f"Identified component: {component}")
     root_cause = diagnosis.get("root_cause")
     if root_cause:
-        parts.append(f"Root cause (free-text): {root_cause}")
+        parts.append(f"Investigation conclusion (root cause): {root_cause}")
     report = diagnosis.get("report")
     if report:
-        parts.append(f"RCA report:\n{report}")
+        parts.append(f"Supporting RCA report:\n{report}")
     return "\n\n".join(parts) if parts else ""

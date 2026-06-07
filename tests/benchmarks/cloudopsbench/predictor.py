@@ -104,6 +104,23 @@ _ROOT_CAUSES: tuple[str, ...] = (
     "service_env_var_address_mismatch",
     "service_sidecar_port_conflict",
     "service_dns_resolution_failure",
+    # Performance — derive Performance_Fault via the scoring default bucket.
+    # These were absent from the vocab through the 2026-06-06 run, so the LLM
+    # was never told they were valid and ``pod_network_delay`` would mis-snap
+    # onto ``node_network_delay`` (Infrastructure_Fault). That capped a1 on the
+    # entire unseen-shape stratum (performance + admission) near zero even
+    # though object_a1 was ~0.40. See ANALYSIS.md for that run.
+    "pod_network_delay",
+    "pod_cpu_overload",
+    # Admission — the ``namespace_*`` quota family. ``_snap_root_cause`` already
+    # passes ``namespace_*`` tokens through verbatim and the scorer maps the
+    # prefix to Admission_Fault, but listing the concrete tokens here surfaces
+    # them in the system prompt so the model actually emits them.
+    "namespace_cpu_quota_exceeded",
+    "namespace_memory_quota_exceeded",
+    "namespace_pod_quota_exceeded",
+    "namespace_service_quota_exceeded",
+    "namespace_storage_quota_exceeded",
 )
 
 # fault_object values are canonical paths. The scorer accepts whatever
@@ -395,6 +412,8 @@ def emit_paper_predictions(
     alert_text: str,
     investigation_summary: str,
     llm: Any,
+    metric_alerts: str = "",
+    performance_localization_hint: dict[str, str] | None = None,
 ) -> dict[str, Any] | None:
     """Ask the LLM to translate the investigation into paper-format predictions.
 
@@ -409,7 +428,12 @@ def emit_paper_predictions(
     pre-predictor behavior.
     """
     system = _build_system_prompt()
-    user_content = _build_user_prompt(alert_text, investigation_summary)
+    user_content = _build_user_prompt(
+        alert_text,
+        investigation_summary,
+        metric_alerts=metric_alerts,
+        performance_localization_hint=performance_localization_hint,
+    )
 
     try:
         response = retry_on_rate_limit(
@@ -467,28 +491,94 @@ def _build_system_prompt() -> str:
         f"  namespace/<ns>     where ns is one of: {', '.join(_FAULT_OBJECT_NAMESPACES)}\n\n"
         "Rules:\n"
         "  - Output ONLY the JSON object. No prose, no markdown fences.\n"
-        "  - Rank 1 must be your strongest hypothesis given the evidence.\n"
+        "  - If an INVESTIGATION SUMMARY is provided, it is the conclusion of a\n"
+        "    tool-driven root-cause investigation. Treat it as AUTHORITATIVE:\n"
+        "    rank 1 MUST be the schema-formalized version of the component and\n"
+        "    root cause it identifies. Do NOT re-diagnose from the alert and\n"
+        "    discard it — only deviate if the summary names no component or is\n"
+        "    internally contradictory. (The scope rule below still applies when\n"
+        "    choosing the fault_object level.)\n"
+        "  - With NO investigation summary, rank 1 is your strongest hypothesis\n"
+        "    reasoning from the alert alone.\n"
         "  - Ranks 2 and 3 should be plausible alternatives, not duplicates.\n"
-        "  - fault_taxonomy MUST correspond to the chosen root_cause family.\n"
+        "  - fault_taxonomy MUST correspond to the chosen root_cause family.\n\n"
+        "Scope rule (CRITICAL — the fault lives at the level it ORIGINATES, not\n"
+        "where symptoms show up):\n"
+        "  - If root_cause is any 'namespace_*' admission token (e.g.\n"
+        "    'namespace_memory_quota_exceeded', 'namespace_cpu_quota_exceeded',\n"
+        "    'namespace_pod_quota_exceeded'), fault_object MUST be\n"
+        "    'namespace/<X>' — NEVER 'app/<service>'. Quota / admission faults\n"
+        "    live at the namespace; individual services are downstream victims.\n"
+        "  - If the evidence shows MULTIPLE services in the same namespace\n"
+        "    failing together AND the cause is a namespace-level limit (quota,\n"
+        "    service account, network policy, resource cap), the strongest\n"
+        "    rank-1 hypothesis is 'namespace/<X>' even if one service appears\n"
+        "    'first to fail'. A single-service prediction here is wrong scope.\n"
+        "  - If the cause is genuinely an app-level misconfiguration (wrong\n"
+        "    port, bad image reference, probe misconfig, missing secret binding\n"
+        "    on ONE deployment), keep fault_object as 'app/<service>'. The\n"
+        "    scope rule only fires for cross-service namespace-wide failures.\n\n"
+        "Performance-fault disambiguation (when metric anomalies are present):\n"
+        "  - ``pod_cpu_overload``: rank-1 ``fault_object`` is the service whose\n"
+        "    alert shows RESOURCE_SATURATION / cpu_cfs throttling ON THAT SERVICE.\n"
+        "  - ``pod_network_delay``: rank-1 ``fault_object`` is the service with\n"
+        "    the largest relative LATENCY_DEGRADATION spike (highest +%% increase\n"
+        "    in p50/p90), NOT a different service that only shows CPU throttling.\n"
+        "    CPU throttling on service A does not localize ``pod_network_delay``\n"
+        "    onto A when service B has the extreme latency spike.\n"
+        "  - Do NOT emit ``namespace_*`` quota tokens on performance alerts unless\n"
+        "    the investigation explicitly identifies a ResourceQuota admission block.\n"
+        "  - When an ALERT-DERIVED PERFORMANCE LOCALIZATION block is provided in\n"
+        "    the user message, it is AUTHORITATIVE for rank-1 ``fault_object`` and\n"
+        "    ``root_cause`` — formalize it even if the investigation summary names\n"
+        "    a different service or a cluster-wide CPU saturation narrative.\n"
     )
 
 
-def _build_user_prompt(alert_text: str, investigation_summary: str) -> str:
+def _build_user_prompt(
+    alert_text: str,
+    investigation_summary: str,
+    *,
+    metric_alerts: str = "",
+    performance_localization_hint: dict[str, str] | None = None,
+) -> str:
+    alert_block = alert_text.strip()
+    if metric_alerts.strip():
+        alert_block = (
+            f"{alert_block}\n\n{metric_alerts.strip()}" if alert_block else metric_alerts.strip()
+        )
+
+    perf_block = ""
+    if performance_localization_hint:
+        perf_block = (
+            "ALERT-DERIVED PERFORMANCE LOCALIZATION (AUTHORITATIVE for rank-1\n"
+            "fault_object + root_cause — overrides cluster-wide investigation\n"
+            "narratives that name the wrong service):\n"
+            f"  fault_object: {performance_localization_hint.get('fault_object', '')}\n"
+            f"  root_cause: {performance_localization_hint.get('root_cause', '')}\n"
+            f"  rationale: {performance_localization_hint.get('rationale', '')}\n\n"
+        )
+
     if investigation_summary.strip():
         body = (
             "ALERT:\n"
-            f"{alert_text}\n\n"
-            "INVESTIGATION SUMMARY:\n"
+            f"{alert_block}\n\n"
+            "INVESTIGATION SUMMARY (formalize its conclusion unless the performance\n"
+            "localization block below overrides rank-1):\n"
             f"{investigation_summary}\n\n"
-            "Emit the JSON object now."
+            f"{perf_block}"
+            "Set rank 1 to the localized component and root cause (apply the scope\n"
+            "rule for fault_object level). Emit the JSON object now."
         )
     else:
         # llm_alone path — no prior investigation to lean on.
         body = (
             "ALERT:\n"
-            f"{alert_text}\n\n"
+            f"{alert_block}\n\n"
+            f"{perf_block}"
             "No prior investigation evidence is available; reason from the\n"
-            "alert alone. Emit the JSON object now."
+            "alert and any performance localization block above. Emit the JSON\n"
+            "object now."
         )
     return body
 
