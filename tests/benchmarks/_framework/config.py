@@ -131,6 +131,19 @@ class BenchmarkConfig(BaseModel):
     # produces less adjacent-token bias.
     agent_variant: Literal["default", "trimmed_prompt"] = "default"
 
+    # Predictor variant for adapters with a paper-format predictor stage.
+    # ``"default"`` (the default) uses the text-emit predictor in
+    # ``predictor/llm_call.py`` — fed back through opensre's LLM client wrapper.
+    # ``"structured"`` swaps in the OpenAI structured-outputs variant in
+    # ``predictor/llm_call_structured_openai.py`` — grammar-constrained sampling at
+    # the API level, so ``root_cause`` and ``fault_taxonomy`` are emitted
+    # from the closed vocabulary by construction (no off-vocab fallout).
+    #
+    # OpenAI-only (gpt-4o-2024-08-06+ or gpt-5). Honored only by the
+    # CloudOpsBench adapter — cross-field lint refuses ``"structured"`` on
+    # other adapters or with non-OpenAI llms.
+    predictor_variant: Literal["default", "structured"] = "default"
+
     # ----------------------------------------------------------------------- #
     # Pydantic-level validation                                               #
     # ----------------------------------------------------------------------- #
@@ -213,6 +226,35 @@ class BenchmarkConfig(BaseModel):
                 "that measures the default agent. Set agent_variant: default "
                 "or run against the cloudopsbench adapter."
             )
+
+        # Cross-field guard: predictor_variant="structured" requires the
+        # cloudopsbench adapter (only adapter with a predictor stage) AND
+        # an OpenAI-compatible LLM (structured outputs is OpenAI-only).
+        if self.predictor_variant == "structured":
+            if self.benchmark != "cloudopsbench":
+                errors.append(
+                    f"predictor_variant=structured is honored only by the "
+                    f"cloudopsbench adapter, but benchmark={self.benchmark!r}. "
+                    "Set predictor_variant: default or run against cloudopsbench."
+                )
+            # Prefixes for OpenAI models that support structured outputs.
+            # Includes the o-series (o1, o3, o4-mini) and gpt-series. Other
+            # providers may add structured-output support — when they do, a
+            # peer ``llm_call_structured_<provider>.py`` module lands and
+            # the dispatcher routes by LLM provider. Until then, this guard
+            # refuses non-OpenAI llms with a clear error.
+            openai_prefixes = ("gpt-", "openai", "o1", "o3", "o4")
+            non_openai_llms = [llm for llm in self.llms if not llm.startswith(openai_prefixes)]
+            if non_openai_llms:
+                errors.append(
+                    f"predictor_variant=structured currently supports OpenAI "
+                    f"models only (gpt-4o-2024-08-06+, gpt-5, o-series). "
+                    f"Found non-OpenAI llms: {non_openai_llms}. Either set "
+                    "predictor_variant: default or restrict llms to OpenAI "
+                    "models. Other-provider peer variants "
+                    "(llm_call_structured_anthropic.py, "
+                    "llm_call_structured_deepseek.py) are planned follow-ups."
+                )
 
         # Output dir must not be a managed system path. Compare BOTH the lexical
         # form and the resolved form (on macOS /etc → /private/etc symlink would
