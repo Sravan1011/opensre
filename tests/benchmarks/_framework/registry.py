@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
-from tests.benchmarks._framework.adapter_base import BenchmarkAdapter
+from tests.benchmarks._framework.adapter_base import AdapterCapabilities, BenchmarkAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +89,40 @@ def build_adapter(name: str) -> BenchmarkAdapter:
             f"known adapters: {known_adapters() or '<none registered>'}"
         )
     return _ADAPTER_FACTORIES[name]()
+
+
+def capabilities_for(name: str) -> AdapterCapabilities:
+    """Return the registered adapter's declared capability flags.
+
+    Used by config validation (and any future framework-level
+    capability gating) to avoid hardcoded ``if benchmark == "cloudopsbench"``
+    branches.
+
+    Capabilities live as a class attribute on the adapter
+    (``ClassVar[AdapterCapabilities]``), so when the registered factory
+    IS the adapter class — the common pattern, e.g.
+    ``register_adapter("cloudopsbench", CloudOpsBenchAdapter)`` — we
+    read the attribute off the class directly. No instantiation, no
+    adapter-specific side effects (HF dataset load, replay backend
+    setup). The fallback covers the less common closure-factory pattern.
+
+    Raises ``KeyError`` with the same "known adapters" hint as
+    ``build_adapter`` when ``name`` is not registered. A typo in
+    ``config.benchmark`` surfaces with a useful message rather than
+    silently bypassing capability checks.
+    """
+    ensure_known_adapters_registered()
+    if name not in _ADAPTER_FACTORIES:
+        raise KeyError(
+            f"no adapter registered as {name!r}. "
+            f"known adapters: {known_adapters() or '<none registered>'}"
+        )
+    factory = _ADAPTER_FACTORIES[name]
+    if isinstance(factory, type) and issubclass(factory, BenchmarkAdapter):
+        return factory.capabilities
+    # Closure / lambda factory — fall back to instantiation. Uncommon
+    # but supported; the registry accepts any zero-arg callable.
+    return factory().capabilities
 
 
 def known_adapters() -> list[str]:
