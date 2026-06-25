@@ -5,22 +5,22 @@ from typing import Any
 
 import pytest
 
+from app.integrations.verifiers.aws import verify_aws as _verify_aws
+from app.integrations.verifiers.github import verify_github as _verify_github
+from app.integrations.verifiers.grafana import verify_grafana as _verify_grafana
+from app.integrations.verifiers.sentry import verify_sentry as _verify_sentry
+from app.integrations.verifiers.snowflake import verify_snowflake as _verify_snowflake
+from app.integrations.verifiers.telegram import verify_telegram as _verify_telegram
+from app.integrations.verifiers.tracer import verify_tracer as _verify_tracer
 from app.integrations.verify import (
-    _verify_aws,
-    _verify_coralogix,
-    _verify_datadog,
-    _verify_github,
-    _verify_grafana,
-    _verify_honeycomb,
-    _verify_sentry,
-    _verify_snowflake,
-    _verify_telegram,
-    _verify_tracer,
-    _verify_vercel,
     resolve_effective_integrations,
     verification_exit_code,
     verify_integrations,
 )
+from app.services.coralogix.verifier import verify_coralogix as _verify_coralogix
+from app.services.datadog.verifier import verify_datadog as _verify_datadog
+from app.services.honeycomb.verifier import verify_honeycomb as _verify_honeycomb
+from app.services.vercel.verifier import verify_vercel as _verify_vercel
 
 
 class _FakeResponse:
@@ -163,7 +163,7 @@ def test_verify_telegram_passes_with_get_me(monkeypatch: pytest.MonkeyPatch) -> 
         return _FakeResponse({"ok": True, "result": {"username": "opensre_bot"}})
 
     monkeypatch.setattr(
-        "app.integrations._verification_adapters.requests.get",
+        "app.integrations.verifiers.telegram.requests.get",
         _fake_requests_get,
     )
     result = _verify_telegram(
@@ -182,12 +182,108 @@ def test_verify_telegram_missing_token() -> None:
 
 def test_verify_telegram_api_not_ok(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "app.integrations._verification_adapters.requests.get",
+        "app.integrations.verifiers.telegram.requests.get",
         lambda *_a, **_kw: _FakeResponse({"ok": False, "description": "Unauthorized"}),
     )
     result = _verify_telegram("local store", {"bot_token": "bad"})
     assert result["status"] == "failed"
     assert "unauthorized" in result["detail"].lower()
+
+
+def test_verify_slack_send_test_posts_to_webhook(monkeypatch: pytest.MonkeyPatch) -> None:
+    """End-to-end: ``verify_integrations("slack", send_slack_test=True)`` must
+    actually deliver the test message through the verifier's HTTP path.
+
+    Protects the cross-module ``RUNTIME_SEND_TEST_KEY`` plumbing: ``verify.py``
+    injects the key into config, ``verifiers/slack.py`` reads it, the
+    ``httpx.post`` call fires. If either side drifts (rename, typo,
+    silent fallthrough) this test fails — without it, ``--send-slack-test``
+    could silently stop delivering.
+    """
+    webhook_url = "https://hooks.slack.com/services/T000/B000/test"
+    monkeypatch.setattr(
+        "app.integrations.catalog.load_integrations",
+        lambda: [
+            {
+                "id": "slack-local",
+                "service": "slack",
+                "status": "active",
+                "instances": [
+                    {
+                        "name": "default",
+                        "tags": {},
+                        "credentials": {"webhook_url": webhook_url},
+                    }
+                ],
+            }
+        ],
+    )
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+
+    posted: list[tuple[str, dict[str, Any]]] = []
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+    def _fake_post(url: str, *_args: Any, json: dict[str, Any], **_kwargs: Any) -> _FakeResponse:
+        posted.append((url, json))
+        return _FakeResponse()
+
+    monkeypatch.setattr("app.integrations.verifiers.slack.httpx.post", _fake_post)
+
+    results = verify_integrations("slack", send_slack_test=True)
+
+    assert len(posted) == 1, "send_slack_test=True must trigger exactly one POST"
+    posted_url, posted_payload = posted[0]
+    assert posted_url == webhook_url
+    assert "Tracer integration test" in posted_payload["text"]
+    assert results == [
+        {
+            "service": "slack",
+            "source": "local store",
+            "status": "passed",
+            "detail": "Webhook delivered test message successfully.",
+        }
+    ]
+
+
+def test_verify_slack_send_test_false_does_not_post(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default (``send_slack_test=False``) must NOT POST to the webhook.
+
+    Pins the inverse direction: a config-only slack verifier must remain
+    side-effect-free unless the runtime flag is explicitly set.
+    """
+    monkeypatch.setattr(
+        "app.integrations.catalog.load_integrations",
+        lambda: [
+            {
+                "id": "slack-local",
+                "service": "slack",
+                "status": "active",
+                "instances": [
+                    {
+                        "name": "default",
+                        "tags": {},
+                        "credentials": {
+                            "webhook_url": "https://hooks.slack.com/services/T000/B000/test"
+                        },
+                    }
+                ],
+            }
+        ],
+    )
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+
+    def _fail_post(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("httpx.post must not be called when send_slack_test=False")
+
+    monkeypatch.setattr("app.integrations.verifiers.slack.httpx.post", _fail_post)
+
+    results = verify_integrations("slack")  # default: send_slack_test=False
+
+    assert results[0]["status"] == "passed"
+    assert "Use --send-slack-test" in results[0]["detail"]
 
 
 def test_verify_slack_uses_v2_store_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -234,7 +330,7 @@ def test_verify_grafana_passes_with_supported_datasource(monkeypatch: pytest.Mon
         )
 
     monkeypatch.setattr(
-        "app.integrations._verification_adapters.requests.get",
+        "app.integrations.verifiers.grafana.requests.get",
         _fake_requests_get,
     )
 
@@ -368,7 +464,7 @@ def test_verify_aws_assume_role_passes(monkeypatch: pytest.MonkeyPatch) -> None:
             return _AssumedSTSClient()
         return _BaseSTSClient()
 
-    monkeypatch.setattr("app.integrations._verification_adapters.boto3.client", _fake_boto3_client)
+    monkeypatch.setattr("app.integrations.verifiers.aws.boto3.client", _fake_boto3_client)
 
     result = _verify_aws(
         "local store",
@@ -395,11 +491,11 @@ def test_verify_tracer_passes_with_env_jwt(monkeypatch: pytest.MonkeyPatch) -> N
             return [{"id": "int-1"}, {"id": "int-2"}]
 
     monkeypatch.setattr(
-        "app.integrations._verification_adapters.extract_org_id_from_jwt",
+        "app.integrations.verifiers.tracer.extract_org_id_from_jwt",
         lambda _token: "org_123",
     )
     monkeypatch.setattr(
-        "app.integrations._verification_adapters.TracerClient",
+        "app.integrations.verifiers.tracer.TracerClient",
         _FakeTracerClient,
     )
 
@@ -418,11 +514,8 @@ def test_verify_github_passes_with_valid_streamable_http_config(
 ) -> None:
     from types import SimpleNamespace
 
-    import app.integrations._verification_adapters as _adapters
-
     monkeypatch.setattr(
-        _adapters,
-        "validate_github_mcp_config",
+        f"{_verify_github.__module__}.validate_github_mcp_config",
         lambda _config: SimpleNamespace(ok=True, detail="GitHub MCP ok", failure_category=""),
     )
 
@@ -450,11 +543,8 @@ def test_verify_github_reports_credential_less_store_record_as_missing() -> None
 
 
 def test_verify_sentry_passes_with_valid_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    import app.integrations._verification_adapters as _adapters
-
     monkeypatch.setattr(
-        _adapters,
-        "_verify_with_validation_result",
+        "app.integrations.verification.validation.verify_with_validation_result",
         lambda service, source, _config, **_kw: {
             "service": service,
             "source": source,
