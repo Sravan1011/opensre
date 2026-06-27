@@ -20,15 +20,15 @@ from typing import Any
 from rich.console import Console
 from rich.markup import escape
 
-from core.runtime.agent import Agent
-from core.runtime.llm.agent_llm_client import AgentLLMResponse, ToolCall
-from integrations.llm_cli.failure_explain import is_context_length_overflow
-from interactive_shell.harness.agent_context import AgentContext
-from interactive_shell.harness.llm_context import (
+from context import (
     build_action_system_prompt,
     build_action_user_message,
 )
-from interactive_shell.harness.llm_context.session import ReplSession
+from context.agent_context import AgentContext
+from context.session import ReplSession
+from core.runtime.agent import Agent
+from core.runtime.llm.agent_llm_client import AgentLLMResponse, ToolCall
+from integrations.llm_cli.failure_explain import is_context_length_overflow
 from interactive_shell.runtime.core.turn_accounting import ToolCallingTurnResult
 from interactive_shell.tools.tool_contracts import ToolContext
 from interactive_shell.tools.tool_registry import REGISTRY

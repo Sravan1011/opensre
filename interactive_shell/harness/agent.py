@@ -13,6 +13,8 @@ from contextlib import suppress
 
 from rich.console import Console
 
+from context.session import ReplSession
+from context.state import MutableAgentState
 from interactive_shell.harness.agent_loop import (
     GatherEvidence,
     ResponseGenerator,
@@ -20,8 +22,6 @@ from interactive_shell.harness.agent_loop import (
     run_agent_prompt,
 )
 from interactive_shell.harness.events import AgentEvent, AgentEventSink
-from interactive_shell.harness.llm_context.session import ReplSession
-from interactive_shell.harness.state import ConversationState
 from interactive_shell.runtime.core.confirmation import DispatchCancelled
 from interactive_shell.runtime.core.turn_accounting import ShellTurnResult
 from interactive_shell.utils.telemetry import PromptRecorder
@@ -56,7 +56,7 @@ class ShellAgent:
             self.subscribe(event_sink)
 
     @property
-    def state(self) -> ConversationState:
+    def state(self) -> MutableAgentState:
         """Return the shell-owned conversational state for this session."""
         return self.session.agent
 

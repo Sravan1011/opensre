@@ -14,8 +14,8 @@ from typing import Literal
 from rich.console import Console
 
 from config.llm_reasoning_effort import apply_reasoning_effort
-from interactive_shell.harness.agent_context import AgentContext
-from interactive_shell.harness.llm_context.session import ReplSession
+from context.agent_context import AgentContext
+from context.session import ReplSession
 from interactive_shell.harness.response import generate_response
 from interactive_shell.harness.tool_calling import run_tool_calling_turn
 from interactive_shell.runtime.core.turn_accounting import (

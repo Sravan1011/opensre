@@ -7,13 +7,22 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from context.agent_context import AgentContext
 from core.runtime.context_budget import (
     context_budget_ceiling_for_model,
     enforce_context_budget,
 )
 from core.runtime.execution import execute_tools, public_tool_input
 from core.runtime.llm.agent_llm_client import ToolCall
-from core.runtime.messages import build_assistant_message, build_tool_result_messages
+from core.runtime.messages import (
+    RuntimeMessage,
+    RuntimeMessageLike,
+    convert_to_llm_messages,
+    ensure_runtime_messages,
+    runtime_assistant_message,
+    runtime_tool_result_message,
+    user_runtime_message,
+)
 from core.runtime.types import RuntimeTool
 from platform.observability.tool_trace import redact_sensitive
 
@@ -34,7 +43,7 @@ class AgentRunResult:
     during the loop.
     """
 
-    messages: list[dict[str, Any]]
+    messages: list[RuntimeMessage]
     final_text: str
     executed: list[tuple[ToolCall, Any]] = field(default_factory=list)
     hit_iteration_cap: bool = False
@@ -78,23 +87,42 @@ class Agent[RuntimeToolT: RuntimeTool]:
         self._max_iterations = max_iterations
         self._on_event = on_event
 
-    def run(self, initial_messages: list[dict[str, Any]]) -> AgentRunResult:
+    def run(
+        self,
+        initial_messages: Sequence[RuntimeMessageLike] | None = None,
+        *,
+        agent_context: AgentContext | None = None,
+    ) -> AgentRunResult:
         """Run the think → call-tools → observe loop and return its outcome."""
-        messages = list(initial_messages)
-        runtime_tools = list(self._filter_tools(self._tools))
+        if agent_context is not None:
+            agent_context.validate_runtime_request()
+            messages = agent_context.runtime_messages()
+            system = agent_context.system_prompt
+            tools = list(agent_context.active_tools)
+            resolved = agent_context.resolved_integrations
+            max_iterations = agent_context.max_iterations
+        elif initial_messages is not None:
+            messages = ensure_runtime_messages(initial_messages)
+            system = self._system
+            tools = list(self._tools)
+            resolved = self._resolved
+            max_iterations = self._max_iterations
+        else:
+            raise ValueError("Agent.run requires initial_messages or agent_context.")
+
+        runtime_tools = list(self._filter_tools(tools))
         tool_schemas = self._llm.tool_schemas(runtime_tools)
         ceiling = context_budget_ceiling_for_model(getattr(self._llm, "_model", None))
         executed: list[tuple[ToolCall, Any]] = []
         final_text = ""
         hit_cap = True
 
-        for iteration in range(self._max_iterations):
+        for iteration in range(max_iterations):
             self._emit("llm_start", {"iteration": iteration})
-            enforce_context_budget(
-                messages, system=self._system, tools=tool_schemas, ceiling=ceiling
-            )
-            response = self._llm.invoke(messages, system=self._system, tools=tool_schemas)
-            messages.append(build_assistant_message(self._llm, response))
+            llm_messages = convert_to_llm_messages(self._llm, messages)
+            enforce_context_budget(llm_messages, system=system, tools=tool_schemas, ceiling=ceiling)
+            response = self._llm.invoke(llm_messages, system=system, tools=tool_schemas)
+            messages.append(runtime_assistant_message(self._llm, response))
 
             if not response.has_tool_calls:
                 accept, nudge = self._should_accept_conclusion(
@@ -111,7 +139,7 @@ class Agent[RuntimeToolT: RuntimeTool]:
                         "the conclusion, otherwise the LLM will loop on an unchanged "
                         "message history until max_iterations."
                     )
-                messages.append({"role": "user", "content": nudge})
+                messages.append(user_runtime_message(nudge))
                 continue
 
             for tc in response.tool_calls:
@@ -120,8 +148,8 @@ class Agent[RuntimeToolT: RuntimeTool]:
                     {"id": tc.id, "name": tc.name, "input": public_tool_input(tc.input)},
                 )
 
-            results = execute_tools(response.tool_calls, runtime_tools, self._resolved)
-            messages.extend(build_tool_result_messages(self._llm, response.tool_calls, results))
+            results = execute_tools(response.tool_calls, runtime_tools, resolved)
+            messages.append(runtime_tool_result_message(self._llm, response.tool_calls, results))
 
             for tc, output in zip(response.tool_calls, results):
                 executed.append((tc, output))

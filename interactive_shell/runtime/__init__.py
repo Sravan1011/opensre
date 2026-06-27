@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from typing import TYPE_CHECKING, Any
 
 from interactive_shell.runtime.background.models import (
@@ -10,15 +11,15 @@ from interactive_shell.runtime.core.tasks import TaskRegistry
 from platform.common.task_types import TaskKind, TaskRecord, TaskStatus
 
 if TYPE_CHECKING:
-    import interactive_shell.harness.llm_context.session as _session_types
+    from context.session import (
+        ReplRuntimeContext,
+        ReplSession,
+        ReplSessionBootstrapSpec,
+        create_repl_runtime_context,
+        prepare_repl_session,
+    )
 
-    ReplRuntimeContext = _session_types.ReplRuntimeContext
-    ReplSession = _session_types.ReplSession
-    ReplSessionBootstrapSpec = _session_types.ReplSessionBootstrapSpec
-    create_repl_runtime_context = _session_types.create_repl_runtime_context
-    prepare_repl_session = _session_types.prepare_repl_session
-
-# Session state/context live in ``interactive_shell.harness.llm_context.session`` (the canonical
+# Session state/context live in ``context.session`` (the canonical
 # home). They are re-exported here lazily so the ergonomic
 # ``from interactive_shell.runtime import ReplSession`` keeps working without an
 # import cycle (session.context imports runtime.core.state at module load).
@@ -35,8 +36,7 @@ _SESSION_EXPORTS = frozenset(
 
 def __getattr__(name: str) -> Any:
     if name in _SESSION_EXPORTS:
-        import interactive_shell.harness.llm_context.session as _session
-
+        _session = importlib.import_module("context.session")
         return getattr(_session, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

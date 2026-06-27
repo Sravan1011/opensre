@@ -1,7 +1,7 @@
 """Characterization snapshot for llm_context prompt assembly.
 
 This is the safety net for the typed/DRY/functional refactor of
-``interactive_shell/harness/llm_context``: the action-agent system prompt, the
+``context``: the action-agent system prompt, the
 action user message, and the conversational ``build_cli_agent_prompt`` output
 are heavily relied upon by the locked live turn-scenario suite and MUST stay
 byte-for-byte identical across the refactor.
@@ -28,14 +28,14 @@ from typing import Any
 
 import pytest
 
-from interactive_shell.harness.agent_context import AgentContext
-from interactive_shell.harness.llm_context import (
+from context import (
     build_action_system_prompt,
     build_action_user_message,
 )
-from interactive_shell.harness.llm_context.assistant_prompt import build_cli_agent_prompt
-from interactive_shell.harness.llm_context.models import coerce_messages
-from interactive_shell.harness.llm_context.session import InMemorySessionStorage, ReplSession
+from context.agent_context import AgentContext
+from context.assistant_prompt import build_cli_agent_prompt
+from context.models import coerce_messages
+from context.session import InMemorySessionStorage, ReplSession
 
 _SNAPSHOT_PATH = Path(__file__).with_name("prompt_characterization_snapshot.json")
 
