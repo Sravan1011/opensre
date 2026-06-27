@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import threading
+from collections.abc import Generator
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.patch_stdout import patch_stdout
@@ -60,6 +61,42 @@ class DispatchCancelled(Exception):
     """Raised when in-flight dispatch is cancelled during confirmation."""
 
 
+def _resolve_runtime_context(
+    session: ReplSession | ReplRuntimeContext | None,
+    *,
+    state: ReplState | None,
+    spinner: SpinnerState | None,
+    pt_session: PromptSession[str] | None,
+    inbox: _alert_inbox.AlertInbox | None,
+) -> ReplRuntimeContext:
+    if isinstance(session, ReplRuntimeContext):
+        if state is None and spinner is None and pt_session is None and inbox is None:
+            return session
+        return ReplRuntimeContext(
+            session=session.session,
+            state=state or session.state,
+            spinner=spinner or session.spinner,
+            pt_session=pt_session if pt_session is not None else session.pt_session,
+            inbox=inbox if inbox is not None else session.inbox,
+        )
+    return create_repl_runtime_context(
+        session,
+        state=state,
+        spinner=spinner,
+        pt_session=pt_session,
+        inbox=inbox,
+    )
+
+
+@contextlib.contextmanager
+def _bound_cli_session(session_id: str) -> Generator[None, None, None]:
+    token = bind_cli_session_id(session_id)
+    try:
+        yield
+    finally:
+        reset_cli_session_id(token)
+
+
 class InteractiveShellController:
     """Coordinate prompt input, queued dispatch, background workers, and shutdown."""
 
@@ -72,7 +109,7 @@ class InteractiveShellController:
         pt_session: PromptSession[str] | None = None,
         inbox: _alert_inbox.AlertInbox | None = None,
     ) -> None:
-        self.runtime_context = self._resolve_runtime_context(
+        self.runtime_context = _resolve_runtime_context(
             session,
             state=state,
             spinner=spinner,
@@ -98,33 +135,6 @@ class InteractiveShellController:
         )
         self.background: BackgroundTaskManager | None = None
         self.tasks: list[tuple[str, asyncio.Task[None]]] = []
-
-    def _resolve_runtime_context(
-        self,
-        session: ReplSession | ReplRuntimeContext | None,
-        *,
-        state: ReplState | None,
-        spinner: SpinnerState | None,
-        pt_session: PromptSession[str] | None,
-        inbox: _alert_inbox.AlertInbox | None,
-    ) -> ReplRuntimeContext:
-        if isinstance(session, ReplRuntimeContext):
-            if state is None and spinner is None and pt_session is None and inbox is None:
-                return session
-            return ReplRuntimeContext(
-                session=session.session,
-                state=state or session.state,
-                spinner=spinner or session.spinner,
-                pt_session=pt_session if pt_session is not None else session.pt_session,
-                inbox=inbox if inbox is not None else session.inbox,
-            )
-        return create_repl_runtime_context(
-            session,
-            state=state,
-            spinner=spinner,
-            pt_session=pt_session,
-            inbox=inbox,
-        )
 
     async def start_interactive_shell(self) -> None:
         self.session.schedule_warm_resolved_integrations()
@@ -176,7 +186,7 @@ class InteractiveShellController:
             case CancelTurn(submitted_text=text):
                 if text:
                     self.prompt.render_submitted_prompt(self.echo_console, text)
-                self._cancel_current_turn()
+                self.state.cancel_current_dispatch()
                 return True
             case DeliverConfirmation(text=text):
                 self.state.deliver_confirmation(text)
@@ -185,20 +195,11 @@ class InteractiveShellController:
                 if warning:
                     self.echo_console.print(warning)
                 self.prompt.render_submitted_prompt(self.echo_console, text)
-                await self._enqueue_turn(text)
+                await self.state.queue.put(text)
                 if wait:
-                    await self._await_turn_completion()
+                    await self.state.queue.join()
                 return True
         raise AssertionError(f"Unhandled input action: {action!r}")
-
-    async def _enqueue_turn(self, text: str) -> None:
-        await self.state.queue.put(text)
-
-    async def _await_turn_completion(self) -> None:
-        await self.state.queue.join()
-
-    def _cancel_current_turn(self) -> None:
-        self.state.cancel_current_dispatch()
 
     async def _run_turn_queue_loop(self) -> None:
         while not self.state.exit_requested:
@@ -222,6 +223,8 @@ class InteractiveShellController:
             self.state.queue.task_done()
 
     async def _run_queued_turn(self, text: str) -> None:
+        from interactive_shell.ui.output import set_prompt_suppress_fn
+
         dispatch_cancel = threading.Event()
         current_task = asyncio.current_task()
         if current_task is not None:
@@ -238,7 +241,6 @@ class InteractiveShellController:
             color_system="truecolor",
             legacy_windows=False,
         )
-        from interactive_shell.ui.output import set_prompt_suppress_fn
 
         show_spinner = turn_should_show_spinner(text, self.session)
         if show_spinner:
@@ -250,28 +252,24 @@ class InteractiveShellController:
                 if turn_needs_exclusive_stdin(text, self.session)
                 else repl_safe_progress_scope()
             )
-            session_token = bind_cli_session_id(self.session.session_id)
-            try:
-                recorder = PromptRecorder.start(
-                    session=self.session,
-                    text=text,
-                    turn_kind=_AGENT_TURN_KIND,
+            recorder = PromptRecorder.start(
+                session=self.session,
+                text=text,
+                turn_kind=_AGENT_TURN_KIND,
+            )
+            with _bound_cli_session(self.session.session_id), progress_scope:
+                await asyncio.to_thread(
+                    handle_message_with_agent,
+                    text,
+                    self.session,
+                    console,
+                    recorder=recorder,
+                    confirm_fn=lambda prompt: request_confirmation_via_prompt(
+                        self.state,
+                        prompt,
+                    ),
+                    is_tty=None,
                 )
-                with progress_scope:
-                    await asyncio.to_thread(
-                        handle_message_with_agent,
-                        text,
-                        self.session,
-                        console,
-                        recorder=recorder,
-                        confirm_fn=lambda prompt: request_confirmation_via_prompt(
-                            self.state,
-                            prompt,
-                        ),
-                        is_tty=None,
-                    )
-            finally:
-                reset_cli_session_id(session_token)
         except asyncio.CancelledError:
             console.print(f"[{WARNING}]· interrupted[/]")
             raise
@@ -290,7 +288,7 @@ class InteractiveShellController:
 
     async def _shutdown_runtime(self) -> None:
         self.state.request_exit()
-        self._cancel_current_turn()
+        self.state.cancel_current_dispatch()
 
         for _label, task in self.tasks:
             task.cancel()
