@@ -8,6 +8,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 
 from rich.console import Console
 from rich.markup import escape
@@ -28,6 +29,26 @@ from .background_task_executor import (
 from .task_streaming import SHELL_COMMAND_TIMEOUT_SECONDS, _sr_resolve
 
 _OPENSRE_BLOCKED_SUBCOMMANDS: frozenset[str] = frozenset({"agent"})
+
+_PYTHON_EXECUTABLE_PREFIXES: tuple[str, ...] = ("python", "pypy")
+
+
+def _sys_executable_is_python() -> bool:
+    return Path(sys.executable).name.lower().startswith(_PYTHON_EXECUTABLE_PREFIXES)
+
+
+def build_opensre_cli_argv(args: list[str]) -> list[str]:
+    """Return argv for re-entering the OpenSRE Click CLI.
+
+    Editable/dev installs should use ``python -m cli`` so child processes run
+    against this checkout. Frozen release binaries have ``sys.executable`` set
+    to the ``opensre`` executable itself; passing ``-m cli`` there would send
+    ``-m`` to Click, which fails before the requested subcommand can run.
+    """
+    if getattr(sys, "frozen", False) or not _sys_executable_is_python():
+        return [sys.executable, *args]
+    return [sys.executable, "-m", "cli", *args]
+
 
 # Command paths (one or two whitespace-joined tokens) that drive a
 # full-TTY interactive wizard — ``questionary`` radio widgets, multi-
@@ -370,7 +391,7 @@ def run_opensre_cli_command_result(
             display_command=f"opensre {' '.join(tokens)}",
         )
 
-    argv_list = [sys.executable, "-m", "cli"] + tokens
+    argv_list = build_opensre_cli_argv(tokens)
     display_command = f"opensre {' '.join(tokens)}"
     if execution_plan.execution_mode in {
         ToolExecutionMode.FOREGROUND,

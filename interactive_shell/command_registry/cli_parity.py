@@ -7,7 +7,6 @@ import json
 import os
 import shlex
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
@@ -19,6 +18,7 @@ from interactive_shell.command_registry.types import SlashCommand
 from interactive_shell.runtime import ReplSession, TaskKind
 from interactive_shell.runtime.subprocess_runner import (
     SYNTHETIC_TEST_TIMEOUT_SECONDS,
+    build_opensre_cli_argv,
     start_background_cli_task,
 )
 from interactive_shell.ui import DIM, ERROR, print_command_output
@@ -64,7 +64,7 @@ def run_cli_command(
     child process exits on SIGINT alongside the interrupted ``run`` call.
     """
     console.print()
-    cmd = [sys.executable, "-m", "cli", *args]
+    cmd = build_opensre_cli_argv(args)
     should_capture = capture_output or subprocess_timeout is not None
     try:
         if should_capture:
@@ -129,7 +129,7 @@ def _catalog_task_kind(command: list[str]) -> TaskKind:
 
 def _argv_for_catalog_command(command: list[str]) -> list[str]:
     if command[:1] == ["opensre"]:
-        return [sys.executable, "-m", "cli", *command[1:]]
+        return build_opensre_cli_argv(command[1:])
     return command
 
 
@@ -167,7 +167,7 @@ def _run_test_picker_for_background(session: ReplSession, console: Console) -> b
         env = dict(os.environ)
         env[_TEST_PICKER_SELECTION_FILE_ENV] = str(selection_path)
         result = subprocess.run(
-            [sys.executable, "-m", "cli", "tests"],
+            build_opensre_cli_argv(["tests"]),
             check=False,
             env=env,
         )

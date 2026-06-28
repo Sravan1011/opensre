@@ -2294,6 +2294,38 @@ class TestRunCliCommand:
         assert replayed == [("partial stdout\n", None), ("partial stderr\n", ERROR)]
         assert "timed out" in buf.getvalue()
 
+    def test_frozen_binary_delegate_reexecs_opensre_without_module_flags(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Release binaries have ``sys.executable`` set to ``opensre`` itself.
+
+        Passing ``-m cli`` to that executable sends ``-m`` to Click and fails
+        before slash commands like ``/onboard`` can run.
+        """
+        from interactive_shell.command_registry import cli_parity as m
+        from interactive_shell.runtime.subprocess_runner import opensre_cli_runner
+
+        captured: list[list[str]] = []
+
+        monkeypatch.setattr(opensre_cli_runner.sys, "executable", "/tmp/opensre")
+        monkeypatch.setattr(opensre_cli_runner.sys, "frozen", True, raising=False)
+
+        def _fake_run(
+            cmd: list[str],
+            *,
+            check: bool,
+        ) -> subprocess.CompletedProcess[str]:
+            del check
+            captured.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr(m.subprocess, "run", _fake_run)
+        console, _ = _capture()
+
+        assert m.run_cli_command(console, ["onboard"]) is True
+        assert captured == [["/tmp/opensre", "onboard"]]
+
 
 class TestCliDelegatedCommands:
     """Coverage for commands that simply delegate to the underlying Click CLI."""
