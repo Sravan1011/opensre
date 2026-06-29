@@ -13,9 +13,9 @@ from typing import Any
 
 from rich.console import Console
 
-import interactive_shell.main as main_entrypoint
+import surfaces.interactive_shell.main as main_entrypoint
 from core.agent_harness.session import ReplSession
-from interactive_shell.runtime.startup import first_launch_github as flg
+from surfaces.interactive_shell.runtime.startup import first_launch_github as flg
 
 
 def _console() -> Console:
@@ -261,7 +261,7 @@ def test_repl_main_failed_resume_flushes_starter_session(monkeypatch: Any, tmp_p
         lambda: None,
     )
     monkeypatch.setattr(
-        "interactive_shell.command_registry.session_cmds.resume.resume_session_by_prefix",
+        "surfaces.interactive_shell.command_registry.session_cmds.resume.resume_session_by_prefix",
         lambda *_args, **_kwargs: False,
     )
 

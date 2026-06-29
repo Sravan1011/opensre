@@ -4,12 +4,11 @@ on:
   push:
     branches: [main]
     paths:
-      - "cli/**"
+      - "surfaces/**"
       - "config/**"
       - "core/**"
       - "infra/deployment/**"
       - "integrations/**"
-      - "interactive_shell/**"
       - "platform/**"
       - "tools/**"
       - "tests/**"
@@ -26,12 +25,11 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - "cli/**"
+      - "surfaces/**"
       - "config/**"
       - "core/**"
       - "infra/deployment/**"
       - "integrations/**"
-      - "interactive_shell/**"
       - "platform/**"
       - "tools/**"
       - "tests/**"
@@ -50,7 +48,7 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  PYTHON_SOURCE_PATHS: "cli config core infra/deployment integrations interactive_shell platform tools"
+  PYTHON_SOURCE_PATHS: "config core infra/deployment integrations platform surfaces tools"
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -111,11 +109,13 @@ jobs:
             pytest_paths: >-
               tests/tools
               tests/core/runtime/llm
+              tests/core/agent
               tests/platform/observability
               tests/utils
               tests/masking
               tests/core/domain/types
               tests/watch_dog
+              tests/test_core_layering.py
           - os: ubuntu-latest
             shard: cli-runtime
             # Live shell action-agent contracts are validated on openai,
@@ -234,13 +234,12 @@ jobs:
         run: >-
           uv run python -m pytest -n auto -v
           ${{ matrix.pytest_paths }}
-          --cov=cli
           --cov=config
           --cov=core
           --cov=infra.deployment
           --cov=integrations
-          --cov=interactive_shell
           --cov=platform
+          --cov=surfaces
           --cov=tools
           --cov-report=
           --ignore=tests/e2e/kubernetes_local_alert_simulation
