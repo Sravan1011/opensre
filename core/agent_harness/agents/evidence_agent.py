@@ -19,11 +19,11 @@ import os
 from collections.abc import Callable
 from typing import Any
 
-from core.agent_harness.conversation_memory import (
+from core.agent_harness.ports import ErrorReporter, SessionStore, ToolEventObserver
+from core.agent_harness.prompts.conversation_memory import (
     NO_HISTORY_PLACEHOLDER,
     format_recent_conversation,
 )
-from core.agent_harness.ports import ErrorReporter, SessionStore, ToolEventObserver
 from core.agent_harness.session.integrations_cache import (
     has_only_runtime_metadata,
     has_resolved_integrations,
@@ -58,10 +58,9 @@ def _resolve_session_integrations(session: SessionStore) -> dict[str, Any]:
     ):
         return cached
 
-    from tools.investigation.stages.resolve_integrations import resolve_integrations
+    from core.agent_harness.integrations.resolution import resolve_integrations
 
-    updates = resolve_integrations({})  # type: ignore[arg-type]  # env/store resolution path
-    resolved = dict(updates.get("resolved_integrations") or {})
+    resolved = resolve_integrations()
     if resolved:
         session.resolved_integrations_cache = merge_resolved_integrations(
             cached,
@@ -175,7 +174,7 @@ def gather_tool_evidence(
             # back to the text-only assistant rather than failing the turn.
             if error_reporter is not None:
                 error_reporter.report(
-                    exc, context="core.agent_harness.evidence_agent.client", expected=True
+                    exc, context="core.agent_harness.agents.evidence_agent.client", expected=True
                 )
             return None
 
@@ -200,7 +199,7 @@ def gather_tool_evidence(
         return None
     except Exception as exc:
         if error_reporter is not None:
-            error_reporter.report(exc, context="core.agent_harness.evidence_agent")
+            error_reporter.report(exc, context="core.agent_harness.agents.evidence_agent")
         return None
 
     if not result.executed:
