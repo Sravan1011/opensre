@@ -7,7 +7,7 @@ on:
       - "docs/**"
       - "tests/benchmarks/cloudopsbench/infra/**"
       - "infra/install-proxy/**"
-      - "infra/scripts/**"
+      - "tests/e2e/kubernetes/helm/scripts/**"
       - "tests/**"
       - "**/*.md"
       - "**/*.mdx"

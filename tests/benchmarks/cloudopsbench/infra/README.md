@@ -33,7 +33,7 @@ itself (chicken-and-egg). Use the bootstrap script — it's idempotent so safe
 to re-run:
 
 ```bash
-./infra/scripts/bootstrap-bench-state.sh
+./tests/benchmarks/cloudopsbench/infra/scripts/bootstrap-bench-state.sh
 ```
 
 The script creates:
@@ -44,7 +44,7 @@ The script creates:
 Both in `us-east-1` by default. Override with env vars:
 
 ```bash
-AWS_REGION=us-west-2 TF_STATE_BUCKET=my-tfstate ./infra/scripts/bootstrap-bench-state.sh
+AWS_REGION=us-west-2 TF_STATE_BUCKET=my-tfstate ./tests/benchmarks/cloudopsbench/infra/scripts/bootstrap-bench-state.sh
 ```
 
 Once bootstrap completes:

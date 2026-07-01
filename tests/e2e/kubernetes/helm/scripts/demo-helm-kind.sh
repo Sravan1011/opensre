@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Local Helm + kind demo helper (e.g. issue #321 maintainer demo).
-# Run from repo root: ./infra/scripts/demo-helm-kind.sh
+# Run from repo root: ./tests/e2e/kubernetes/helm/scripts/demo-helm-kind.sh
 # Requires: Docker (running), kind, kubectl, helm.
 set -euo pipefail
 

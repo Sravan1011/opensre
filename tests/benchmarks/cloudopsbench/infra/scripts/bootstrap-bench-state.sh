@@ -11,12 +11,12 @@
 #   - AWS CLI configured with credentials that can create S3 + DynamoDB
 #   - Bash 4+, jq optional
 #
-# Usage:
-#   ./infra/scripts/bootstrap-bench-state.sh
+# Usage (from repo root):
+#   ./tests/benchmarks/cloudopsbench/infra/scripts/bootstrap-bench-state.sh
 #
 # Override defaults via env vars:
-#   AWS_REGION=us-west-2 ./infra/scripts/bootstrap-bench-state.sh
-#   TF_STATE_BUCKET=my-tfstate TF_LOCK_TABLE=my-tflock ./infra/scripts/bootstrap-bench-state.sh
+#   AWS_REGION=us-west-2 ./tests/benchmarks/cloudopsbench/infra/scripts/bootstrap-bench-state.sh
+#   TF_STATE_BUCKET=my-tfstate TF_LOCK_TABLE=my-tflock ./tests/benchmarks/cloudopsbench/infra/scripts/bootstrap-bench-state.sh
 #
 # After this completes, run:
 #   cd tests/benchmarks/cloudopsbench/infra && terraform init && terraform plan
