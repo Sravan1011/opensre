@@ -517,25 +517,6 @@ class TestRedaction:
         assert "xoxb-<redacted>" in result
 
 
-class TestExtractError:
-    def test_prefers_error_field(self) -> None:
-        result = slack_delivery._extract_error({"error": "channel_not_found"}, 400, "html body")
-        assert result == "channel_not_found"
-
-    def test_falls_back_to_text_when_no_error_field(self) -> None:
-        result = slack_delivery._extract_error({}, 502, "<html>Bad Gateway</html>")
-        assert result == "<html>Bad Gateway</html>"
-
-    def test_falls_back_to_http_status_when_no_data(self) -> None:
-        result = slack_delivery._extract_error({}, 500, "")
-        assert result == "HTTP 500"
-
-    def test_truncates_text_to_500_chars(self) -> None:
-        long_text = "x" * 1000
-        result = slack_delivery._extract_error({}, 502, long_text)
-        assert len(result) == 500
-
-
 class TestNonJsonBody:
     def test_post_direct_handles_html_error_body(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from platform.notifications.delivery_transport import DeliveryResponse

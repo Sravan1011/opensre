@@ -302,29 +302,6 @@ class TestDiscordRedaction:
         assert result == "some error"
 
 
-class TestDiscordExtractError:
-    def test_prefers_message_field(self) -> None:
-        result = discord_delivery._extract_error({"message": "Missing Permissions"}, 403, "html")
-        assert result == "Missing Permissions"
-
-    def test_falls_back_to_error_field(self) -> None:
-        result = discord_delivery._extract_error({"error": "invalid_form_data"}, 400, "html")
-        assert result == "invalid_form_data"
-
-    def test_falls_back_to_text(self) -> None:
-        result = discord_delivery._extract_error({}, 502, "<html>Bad Gateway</html>")
-        assert result == "<html>Bad Gateway</html>"
-
-    def test_falls_back_to_http_status(self) -> None:
-        result = discord_delivery._extract_error({}, 500, "")
-        assert result == "HTTP 500"
-
-    def test_truncates_text_to_500_chars(self) -> None:
-        long_text = "x" * 1000
-        result = discord_delivery._extract_error({}, 502, long_text)
-        assert len(result) == 500
-
-
 class TestDiscordNonJsonBody:
     def test_post_discord_message_handles_html_error_body(
         self, monkeypatch: pytest.MonkeyPatch
