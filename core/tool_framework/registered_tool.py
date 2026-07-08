@@ -211,6 +211,15 @@ class RegisteredTool:
         default=_extract_no_params,
         repr=False,
     )
+    # Optional tool-owned evidence shaping. Given this tool's raw ``output`` and
+    # the ``tool_input`` it was called with, return a flat ``{evidence_key:
+    # value}`` dict of report-facing keys. The generic gather loop merges the
+    # result into the investigation evidence, so vendors describe their own
+    # output shape instead of the loop hard-coding it (issue #3687).
+    normalize_evidence: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] | None = field(
+        default=None,
+        repr=False,
+    )
     tags: tuple[str, ...] = ()
     cost_tier: CostTier | None = None
     requires_approval: bool = False
@@ -276,6 +285,8 @@ class RegisteredTool:
             raise TypeError("is_available must be callable")
         if not callable(self.extract_params):
             raise TypeError("extract_params must be callable")
+        if self.normalize_evidence is not None and not callable(self.normalize_evidence):
+            raise TypeError("normalize_evidence must be callable")
 
     @property
     def inputs(self) -> dict[str, str]:
@@ -405,6 +416,7 @@ class RegisteredTool:
             run=tool.run,  # type: ignore[attr-defined]
             is_available=tool.is_available,
             extract_params=tool.extract_params,
+            normalize_evidence=getattr(tool, "normalize_evidence", None),
             tags=resolved_tags,
             cost_tier=resolved_cost_tier,
             requires_approval=bool(
@@ -467,6 +479,8 @@ class RegisteredTool:
         retrieval_controls: RetrievalControls | None = None,
         is_available: Callable[[dict[str, dict]], bool] | None = None,
         extract_params: Callable[[dict[str, dict]], dict[str, Any]] | None = None,
+        normalize_evidence: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]]
+        | None = None,
         tags: tuple[str, ...] | None = None,
         cost_tier: CostTier | None = None,
         requires_approval: bool | None = None,
@@ -509,6 +523,7 @@ class RegisteredTool:
             run=func,
             is_available=is_available or _always_available,
             extract_params=extract_params or _extract_no_params,
+            normalize_evidence=normalize_evidence,
             tags=tags or (),
             cost_tier=cost_tier,
             requires_approval=bool(requires_approval),

@@ -44,6 +44,7 @@ from tools.investigation.stages.gather_evidence.tools import (
     get_available_tools,
     merge_tool_evidence,
     select_investigation_tools,
+    tool_by_name,
     tool_event_payload,
 )
 
@@ -173,7 +174,9 @@ class ConnectedInvestigationAgent(AgentEventEmitter, AgentToolFilter):
 
             for tc, output in zip(seed_calls, seed_results):
                 tool_call_cache.store(tool_call_signature(tc), output, loop_iteration=-1)
-                merge_tool_evidence(evidence, tc.name, output, tc.input)
+                merge_tool_evidence(
+                    evidence, tc.name, output, tc.input, tool=tool_by_name(tools, tc.name)
+                )
                 evidence_entries.append(
                     EvidenceEntry(
                         key=tc.name,
@@ -291,7 +294,9 @@ class ConnectedInvestigationAgent(AgentEventEmitter, AgentToolFilter):
                 if is_dup:
                     debug_print(f"[{tc.name}] → duplicate call suppressed")
                     continue
-                merge_tool_evidence(evidence, tc.name, output, tc.input)
+                merge_tool_evidence(
+                    evidence, tc.name, output, tc.input, tool=tool_by_name(tools, tc.name)
+                )
                 evidence_entries.append(
                     EvidenceEntry(
                         key=tc.name,

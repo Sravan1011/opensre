@@ -93,8 +93,9 @@ Steps:
 4. Keep separation of concerns. Put reusable transport or integration-specific parsing code in `integrations/<name>/` or shared tool glue in `core/tool_framework/utils/` rather than copying it into the tool body. Split validation, credential/parameter resolution, dispatch/client calls, result normalization, and error handling into focused helpers or sibling files instead of tangling them inside `run()`.
 5. Return stable, planner-friendly results. Expected failures should produce a structured error shape; external side effects must declare `side_effect_level`, require approval when appropriate, and avoid leaking secrets through `extract_params`, return values, logs, or traceable tool-call kwargs.
 6. If the tool should appear in both investigation and chat surfaces, set `surfaces=("investigation", "chat")`.
-7. Add tests that cover schema shape, availability, extraction, success, failure, and the runtime behavior that the planner depends on.
-8. Before opening or approving the PR, follow [TOOL_INTEGRATION_CHECKLIST.md](TOOL_INTEGRATION_CHECKLIST.md) for tool/integration-specific wiring, payload, docs, and regression checks.
+7. If the tool produces report-facing derived evidence keys for investigations (e.g. `grafana_logs`, `grafana_traces`), declare a `normalize_evidence=<fn>` on the tool (via `@tool(...)` or a `normalize_evidence` method on a `BaseTool`). The function receives `(output, tool_input)` and returns a flat `{evidence_key: value}` dict; the generic gather loop merges it into the investigation evidence. Do **not** add a vendor branch to the gather loop — see the footgun below.
+8. Add tests that cover schema shape, availability, extraction, success, failure, and the runtime behavior that the planner depends on.
+9. Before opening or approving the PR, follow [TOOL_INTEGRATION_CHECKLIST.md](TOOL_INTEGRATION_CHECKLIST.md) for tool/integration-specific wiring, payload, docs, and regression checks.
 
 ### Changing the investigation pipeline
 
@@ -208,6 +209,7 @@ Test commands, turn-handling rules, CI-only paths: **[CI.md](CI.md)**. Live REPL
 - Docker requirement: Several targets, including the Grafana local stack and Chaos Mesh workflows, require a running Docker daemon.
 - Docs navigation: Adding an `.mdx` file under `docs/` is not enough — Mintlify only shows pages listed in `docs/docs.json`. Forgetting the `pages` entry leaves the doc unreachable from the site sidebar.
 - Investigation tool schemas: draft-07 JSON Schema (e.g. `"type": ["object", "null"]`) can pass loose checks but fail the LLM API on first invoke because **all** available investigation tools are sent together. Normalize in the provider adapter and extend registry contract tests; see [docs/investigation-tool-calling.md](docs/investigation-tool-calling.md).
+- Investigation evidence shaping: the gather loop (`tools/investigation/stages/gather_evidence/`) is generic — it stores raw tool output plus the `tool_outputs` trail and delegates report-facing key shaping to each tool's `normalize_evidence` hook. Do **not** reintroduce a central `if tool_name == "query_<vendor>_*"` chain in `merge_tool_evidence` (the open/closed violation removed in issue #3687). A new vendor's derived keys ship with the tool via `normalize_evidence`, not by editing the loop; `test_evidence_normalization.py` guards this invariant.
 - External-system code: `integrations/` owns config, clients, verifiers, and integration-local helpers; `tools/` owns every `@tool(...)` function and `BaseTool` class. Do not reintroduce top-level `vendors/` or `services/` packages.
 - Compatibility shims: Do not leave modules whose only job is to re-export symbols from a new
   location. Update callers to the canonical module and delete the old path.

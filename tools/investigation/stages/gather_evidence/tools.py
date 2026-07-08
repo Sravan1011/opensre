@@ -236,13 +236,26 @@ def tool_event_payload(tc: ToolCall, *, output: Any | None = None) -> dict[str, 
     return payload
 
 
+def tool_by_name(tools: list[RegisteredTool], tool_name: str) -> RegisteredTool | None:
+    """Resolve a registered tool by name for evidence normalization."""
+    return next((t for t in tools if t.name == tool_name), None)
+
+
 def merge_tool_evidence(
     evidence: dict[str, Any],
     tool_name: str,
     output: Any,
     tool_input: dict[str, Any],
+    *,
+    tool: RegisteredTool | None = None,
 ) -> None:
-    """Store raw tool output and the legacy report-facing evidence keys."""
+    """Store raw tool output and let the tool shape its own report-facing keys.
+
+    The loop stays generic: it records the raw output plus the ``tool_outputs``
+    trail, then delegates any vendor-specific evidence shaping to the tool's
+    ``normalize_evidence`` hook (issue #3687). A new vendor adds a normalizer on
+    its tool instead of a branch here.
+    """
     evidence[tool_name] = output
     tool_outputs = evidence.setdefault("tool_outputs", [])
     if isinstance(tool_outputs, list):
@@ -257,29 +270,23 @@ def merge_tool_evidence(
     if not isinstance(output, dict):
         return
 
-    if tool_name == "query_grafana_logs":
-        evidence["grafana_logs"] = output.get("logs", [])
-        evidence["grafana_error_logs"] = output.get("error_logs", [])
-        evidence["grafana_logs_query"] = output.get("query", "")
-        evidence["grafana_logs_service"] = output.get("service_name", "")
+    normalizer = getattr(tool, "normalize_evidence", None) if tool is not None else None
+    if normalizer is None:
         return
-
-    if tool_name == "query_grafana_metrics":
-        metric_name = str(output.get("metric_name") or tool_input.get("metric_name") or "")
-        metric_results = evidence.setdefault("grafana_metric_results", {})
-        if isinstance(metric_results, dict) and metric_name:
-            metric_results[metric_name] = output
-        evidence["grafana_metrics"] = output.get("metrics", [])
+    try:
+        derived = normalizer(output, tool_input)
+    except Exception:
         return
-
-    if tool_name == "query_grafana_traces":
-        evidence["grafana_traces"] = output.get("traces", [])
-        evidence["grafana_pipeline_spans"] = output.get("pipeline_spans", [])
+    if not isinstance(derived, dict):
         return
+    _merge_derived_evidence(evidence, derived)
 
-    if tool_name == "query_grafana_alert_rules":
-        evidence["grafana_alert_rules"] = output.get("rules", [])
-        return
 
-    if tool_name == "query_grafana_service_names":
-        evidence["grafana_service_names"] = output.get("service_names", [])
+def _merge_derived_evidence(evidence: dict[str, Any], derived: dict[str, Any]) -> None:
+    """Merge tool-derived evidence keys, accumulating into existing dict values."""
+    for key, value in derived.items():
+        existing = evidence.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            existing.update(value)
+        else:
+            evidence[key] = value
