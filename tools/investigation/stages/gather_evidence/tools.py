@@ -276,6 +276,13 @@ def merge_tool_evidence(
     try:
         derived = normalizer(output, tool_input)
     except Exception:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "normalize_evidence hook for %r raised; evidence keys will be absent",
+            tool_name,
+            exc_info=True,
+        )
         return
     if not isinstance(derived, dict):
         return
